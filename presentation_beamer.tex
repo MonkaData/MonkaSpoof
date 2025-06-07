@@ -1,0 +1,241 @@
+% Beamer presentation for TIPE – Transpilation mini-OCaml -> C
+% Author: Candidat 22054
+
+% Compile with: latexmk -pdf presentation_beamer.tex
+
+\documentclass[aspectratio=43]{beamer}
+
+% -----------------------------------------------------------------------------
+% PACKAGES
+% -----------------------------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{csquotes}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{hyphenat}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes,trees,backgrounds}
+
+% -----------------------------------------------------------------------------
+% LISTINGS STYLE
+% -----------------------------------------------------------------------------
+\lstdefinestyle{ocaml}{language=[Objective]Caml,basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries\color{blue},commentstyle=\itshape\color{gray},tabsize=2}
+\lstdefinestyle{c}{language=C,basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries\color{purple},commentstyle=\itshape\color{gray},tabsize=2}
+\lstdefinestyle{ebnf}{basicstyle=\ttfamily\small,columns=fullflexible,keepspaces=true}
+
+% -----------------------------------------------------------------------------
+% METADATA
+% -----------------------------------------------------------------------------
+\title{Transpilation de mini-OCaml vers C}
+\subtitle{Lexing, Parsing, Sémantique et Génération}
+\author{Candidat n\textsuperscript{o}~22054}
+\institute{CPGE -- TIPE Informatique}
+\date{Session~2025}
+
+\begin{document}
+
+% Title page
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+% Plan
+\begin{frame}{Plan}
+  \tableofcontents
+\end{frame}
+
+% -----------------------------------------------------------------------------
+\section{Analyse Lexicale}
+% -----------------------------------------------------------------------------
+\begin{frame}{1. Analyse Lexicale – Objectif}
+Découper le flux de caractères en \textbf{tokens} : mots-clés, identifiants, littéraux, opérateurs, ponctuation.
+\end{frame}
+
+\begin{frame}{1.1 Classes de Tokens}
+\begin{itemize}
+  \item Mots-clés : \texttt{let, in, if, then, else, rec, for, while}
+  \item Identifiants : \texttt{[a-zA-Z\_][a-zA-Z0-9\_']*}
+  \item Littéraux :
+    \begin{itemize}
+      \item Entiers : \texttt{[0-9]+}
+      \item Booléens : \texttt{true | false}
+      \item Chaînes : \verb|"([^"\\]|\\.)*"|
+    \end{itemize}
+  \item Opérateurs/Ponctuation : \texttt{+, -, *, /, =, ->, ::, ;, (, ), \{, \}}
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{1.2 OCamllex – Règles & Regex}
+\begin{columns}
+\column{0.5\textwidth}
+Extrait \texttt{lexer.mll} :
+\begin{lstlisting}[style=ocaml]
+rule token = parse
+  | [' '\t'\n']+                     { token lexbuf }
+  | "let"                            { LET }
+  | ['0'-'9']+ as i                  { INT(int_of_string i) }
+  | [a-zA-Z_][a-zA-Z0-9_']* as id    { IDENT id }
+  | "(*" [^*]* "*)"                  { token lexbuf }
+  | _                                { failwith "lex error" }
+\end{lstlisting}
+\column{0.45\textwidth}
+Schéma pipeline :
+\begin{tikzpicture}[>=Stealth,node distance=1.2cm]
+  \node[draw,fill=orange!20,rounded corners] (r) {Regex};
+  \node[draw,fill=cyan!20,right=of r] (nfa) {NFA};
+  \node[draw,fill=green!20,right=of nfa] (dfa) {DFA};
+  \node[draw,fill=yellow!20,right=of dfa] (min) {DFA minimisé};
+  \draw[->] (r)--(nfa)--(dfa)--(min);
+\end{tikzpicture}
+\end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+\section{Analyse Syntaxique}
+% -----------------------------------------------------------------------------
+\begin{frame}{2. Analyse Syntaxique – Objectif}
+Transformer la liste de tokens en \texttt{AST} représentant la structure du programme.
+\end{frame}
+
+\begin{frame}[fragile]{2.1 Grammaire EBNF}
+Définition EBNF avec priorités :
+\begin{lstlisting}[style=ebnf]
+expr ::= "let" ident "=" expr "in" expr
+       | "if" expr "then" expr "else" expr
+       | expr "*" expr
+       | expr "+" expr
+       | ident
+       | int
+       | "(" expr ")"
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{2.2 Menhir – parser.mly}
+\begin{columns}
+\column{0.48\textwidth}
+Règles & actions :
+\begin{lstlisting}[style=ocaml]
+%token LET IN IF THEN ELSE
+%token PLUS TIMES EQ
+%token <int> INT
+%start <expr> main
+%%
+expr:
+  | LET IDENT EQ expr IN expr  { ELet($2,$4,$6) }
+  | IF expr THEN expr ELSE expr { EIf($2,$4,$6) }
+  | expr PLUS expr             { EBinop(Add,$1,$3) }
+\end{lstlisting}
+\column{0.48\textwidth}
+AST correspondant (\texttt{ast.ml}) :
+\begin{lstlisting}[style=ocaml]
+type expr =
+  | EInt   of int
+  | EVar   of string
+  | EBinop of binop*expr*expr
+  | EIf    of expr*expr*expr
+  | ELet   of string*expr*expr
+\end{lstlisting}
+\end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+\section{Analyse Sémantique}
+% -----------------------------------------------------------------------------
+\begin{frame}{3. Analyse Sémantique – Objectif}
+Vérifier portées, types, et annoter l'AST.
+\end{frame}
+
+\begin{frame}{3.1 Table des symboles}
+Gestion de la portée via une pile d'environnements :
+\begin{tikzpicture}[>=Stealth,node distance=1cm]
+  \node[draw,rounded corners,fill=purple!20] (e0){Env global};
+  \node[draw,rounded corners,fill=purple!30,below=of e0] (e1){Env (let ...)};
+  \node[draw,rounded corners,fill=purple!40,below=of e1] (e2){Env (nested)};
+  \draw[->] (e0)--(e1)--(e2);
+\end{tikzpicture}
+\end{frame}
+
+\begin{frame}[fragile]{3.2 Typage & Unification}
+Extraction d'équations puis unification :
+\begin{lstlisting}[style=ocaml]
+| EBinop(Add,e1,e2) ->
+    let t1 = infer env e1 in
+    let t2 = infer env e2 in
+    if t1 = TyInt && t2 = TyInt then TyInt
+    else failwith "Type error"
+\end{lstlisting}
+
+Schéma unification :
+\begin{tikzpicture}[>=Stealth,node distance=1.5cm]
+  \node[draw,ellipse,fill=green!20] (eq){t1=int};
+  \node[draw,ellipse,fill=green!20,right=of eq] (eq2){t2=int};
+  \draw[<->] (eq)--(eq2) node[midway,above]{unif};
+\end{tikzpicture}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+\section{Génération de Code}
+% -----------------------------------------------------------------------------
+\begin{frame}{4. Génération de Code – Objectif}
+Traduire l'AST ou IR annoté en code C lisible et efficace.
+\end{frame}
+
+\begin{frame}{4.1 IR Intermédiaire}
+Instructions simples and labels :
+\begin{tikzpicture}[>=Stealth,node distance=1.6cm]
+  \node[draw,rounded corners,fill=yellow!20] (ast){AST annoté};
+  \node[draw,rounded corners,fill=orange!20,right=of ast] (ir){IR};
+  \node[draw,rounded corners,fill=blue!20,right=of ir] (c){Code C};
+  \draw[->] (ast)--(ir)--(c);
+\end{tikzpicture}
+\end{frame}
+
+\begin{frame}[fragile]{4.2 Extrait C généré}
+\begin{lstlisting}[style=c]
+#include <stdio.h>
+int fib(int n){
+  if(n<=1) return n;
+  return fib(n-1)+fib(n-2);
+}
+int main(){return fib(10);} 
+\end{lstlisting}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+\section{Performances}
+% -----------------------------------------------------------------------------
+\begin{frame}{Performances – Fibonacci}
+\begin{itemize}
+  \item OCaml : 0,76 s @ n=28
+  \item C : 0,17 s @ n=28
+  \item Facteur ~4,47
+\end{itemize}
+% \includegraphics[width=0.8\textwidth]{fib_perf.png}
+\end{frame}
+
+\begin{frame}{Graphique Temps – n=1..1000}
+Formules :
+$$t_C(n)=0.17\frac{n}{28},\quad t_{OCaml}(n)=0.76\frac{n}{28}$$
+\end{frame}
+
+% -----------------------------------------------------------------------------
+\section{Conclusion}
+% -----------------------------------------------------------------------------
+\begin{frame}{Conclusion}
+\begin{itemize}
+  \item Pipeline complet : Lexing → Parsing → Sémantique → Génération
+  \item Techniques classiques : Automates, LALR, Unification, IR
+  \item Perspectives : optimisation, support GC, constructions avancées
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Questions ?}
+  \centering Merci de votre attention !
+\end{frame}
+
+\end{document}
