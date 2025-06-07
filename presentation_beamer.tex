@@ -70,7 +70,7 @@ Découper le flux de caractères en \textbf{tokens} : mots-clés, identifiants, 
 \end{itemize}
 \end{frame}
 
-\begin{frame}[fragile]{1.2 OCamllex – Règles & Regex}
+\begin{frame}[fragile]{1.2 OCamllex – Règles \& Regex}
 \begin{columns}
 \column{0.5\textwidth}
 Extrait \texttt{lexer.mll} :
@@ -118,7 +118,7 @@ expr ::= "let" ident "=" expr "in" expr
 \begin{frame}[fragile]{2.2 Menhir – parser.mly}
 \begin{columns}
 \column{0.48\textwidth}
-Règles & actions :
+Règles \& actions :
 \begin{lstlisting}[style=ocaml]
 %token LET IN IF THEN ELSE
 %token PLUS TIMES EQ
@@ -160,7 +160,7 @@ Gestion de la portée via une pile d'environnements :
 \end{tikzpicture}
 \end{frame}
 
-\begin{frame}[fragile]{3.2 Typage & Unification}
+\begin{frame}[fragile]{3.2 Typage \& Unification}
 Extraction d'équations puis unification :
 \begin{lstlisting}[style=ocaml]
 | EBinop(Add,e1,e2) ->
